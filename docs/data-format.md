@@ -87,9 +87,12 @@ latency over ~32 s and slewing at most 20 ms per notification (see
 - If intervals are lost (chain lags receive time by more than 3 s, e.g. after a
   disconnect), the chain is re-anchored: the gap appears in the timestamps and
   an `rr_chain_rebased` event is written.
-- Absolute timestamps are approximate (tens to a few hundred ms). For HRV
-  metrics use the `rr_ms` sequence; use timestamps to locate gaps and align
-  with other data.
+- Absolute timestamps are approximate and **late**: the sensor reports RR
+  intervals with a delay that the host cannot observe. Compared with R-peaks in
+  `ecg.csv`, RR timestamps were measured 1.5–1.9 s late (H10 firmware 5.0.0).
+  For HRV metrics use the `rr_ms` sequence; use timestamps to locate gaps. To
+  align RR with ECG, match the sequences by interval values (see
+  `analysis/README.md`), not by nearest timestamp.
 
 Example (pandas):
 
