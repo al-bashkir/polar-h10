@@ -75,8 +75,38 @@ h10 info --device ABC12345
 
 ### monitor
 
-Shows live HR, RR, contact, battery, ECG status, packet and drop counters in a
-block that updates in place. Nothing is written to disk. Ctrl+C stops.
+Shows live HR, RR, rolling RMSSD/SDNN, contact, battery, ECG status, packet and
+drop counters and a trace of the last 4 s of ECG, in a block that updates in
+place. Nothing is written to disk. Ctrl+C stops. The `record` display shows the
+same block.
+
+```text
+Polar H10 ABC12345
+────────────────────────────────
+Status      connected
+HR          73 bpm
+RR          785 ms
+RMSSD       15 ms  (last 60 s, 71 beats)
+SDNN        24 ms
+Contact     ok
+Battery     100 %
+ECG         streaming
+Packets     177
+Dropped     0
+Duration    00:01:12
+
+ECG (last 4 s)
+▂▁█▂▂▂▂▁▁▂▁▇▃▂▂▃▁▁▂▂▁█▂▂▂▂▁▁▂▁▇▃▂▂▃▁▁▁▂▁█▂▂▂▂▁▁▂
+```
+
+- **RMSSD and SDNN** use the RR intervals from the last 60 s. They skip intervals outside
+  300–2000 ms or more than 25 % from the window median, and never compute a difference
+  across a skipped beat or a reconnect.
+- **Collecting:** they show `collecting (n/60 s)` until at least 20 clean intervals covering
+  30 s are available. These live values are only an indication; use the `analysis/` pipeline
+  for reported metrics.
+- **ECG trace:** each character is the peak-to-peak range of about 83 ms of signal, so QRS
+  complexes stand out as tall bars. It is a display aid, not the waveform.
 
 ```bash
 h10 monitor

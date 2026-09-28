@@ -93,3 +93,23 @@ func TestRunUsage(t *testing.T) {
 		t.Errorf("negative duration exit = %d", code)
 	}
 }
+
+func TestSparkline(t *testing.T) {
+	// Flat baseline with two sharp spikes: spikes map to the top level.
+	s := make([]int32, 96)
+	for i := range s {
+		s[i] = -100 + int32(i%3)
+	}
+	s[20], s[21] = 1400, -300
+	s[70] = 1200
+	got := []rune(sparkline(s, 12))
+	if len(got) != 12 {
+		t.Fatalf("width = %d", len(got))
+	}
+	if got[2] != '█' || got[8] < '▆' || got[0] != '▁' || got[5] != '▁' {
+		t.Errorf("sparkline = %s", string(got))
+	}
+	if sparkline(nil, 10) != "" || len([]rune(sparkline(s[:5], 10))) != 5 {
+		t.Error("edge cases")
+	}
+}

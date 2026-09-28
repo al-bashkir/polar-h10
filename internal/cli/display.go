@@ -105,11 +105,19 @@ func statusBlock(title string, s recorder.Status, started time.Time, ecgEnabled 
 	now := time.Now()
 	row := func(k, v string) string { return fmt.Sprintf("%-12s%s", k, v) }
 
-	hr, rr := "--", "--"
+	hr, rr, rmssd, sdnn := "--", "--", "--", "--"
 	if !s.HRAt.IsZero() && now.Sub(s.HRAt) < 5*time.Second {
 		hr = fmt.Sprintf("%d bpm", s.HR)
 		if s.RRMs > 0 {
 			rr = fmt.Sprintf("%.0f ms", s.RRMs)
+		}
+		if h := s.LiveHRV; h.OK {
+			win := fmt.Sprintf("(last %.0f s, %d beats)", recorder.LiveHRVWindowS, h.Beats)
+			rmssd = fmt.Sprintf("%.0f ms  %s", h.RMSSD, win)
+			sdnn = fmt.Sprintf("%.0f ms", h.SDNN)
+		} else {
+			rmssd = fmt.Sprintf("collecting (%.0f/%.0f s)", h.SpanS, recorder.LiveHRVWindowS)
+			sdnn = rmssd
 		}
 	}
 	battery := "--"
@@ -146,6 +154,8 @@ func statusBlock(title string, s recorder.Status, started time.Time, ecgEnabled 
 		row("Status", conn),
 		row("HR", hr),
 		row("RR", rr),
+		row("RMSSD", rmssd),
+		row("SDNN", sdnn),
 		row("Contact", contact),
 		row("Battery", battery),
 		row("ECG", ecg),
@@ -157,8 +167,52 @@ func statusBlock(title string, s recorder.Status, started time.Time, ecgEnabled 
 		block = append(block, row("Anomalies", fmt.Sprintf("decode errors %d, ecg gaps %d (~%d samples), reconnects %d",
 			st.DecodeErrors, st.ECGGaps, st.ECGMissingSamplesEst, st.Reconnections)))
 	}
+	if ecg == "streaming" {
+		n := min(len(s.RecentECG), ecgTraceSamples)
+		block = append(block, "", fmt.Sprintf("ECG (last %.0f s)", float64(n)/130),
+			sparkline(s.RecentECG[len(s.RecentECG)-n:], ecgTraceWidth))
+	}
 	block = append(block, extra...)
-	summary := fmt.Sprintf("%s hr=%s rr=%s ecg=%s packets=%d dropped/errors=%d duration=%s",
-		conn, hr, rr, ecg, st.BLEPackets, lost, fmtClock(now.Sub(started)))
+	summary := fmt.Sprintf("%s hr=%s rr=%s rmssd=%s sdnn=%s ecg=%s packets=%d dropped/errors=%d duration=%s",
+		conn, hr, rr, rmssd, sdnn, ecg, st.BLEPackets, lost, fmtClock(now.Sub(started)))
 	return block, summary
+}
+
+// ECG trace in the status block: last ~4 s at 130 Hz, one character per ~83 ms.
+const (
+	ecgTraceSamples = 520
+	ecgTraceWidth   = 48
+)
+
+var sparkLevels = []rune("▁▂▃▄▅▆▇█")
+
+// sparkline renders samples as width block characters. Each character shows
+// the peak-to-peak range of its slice of samples, scaled to the largest range
+// in the trace, so QRS complexes stand out regardless of baseline drift or
+// polarity. It is a display aid, not a waveform.
+func sparkline(samples []int32, width int) string {
+	if len(samples) == 0 || width <= 0 {
+		return ""
+	}
+	width = min(width, len(samples))
+	ranges := make([]int32, width)
+	var hi int32
+	for c := range width {
+		a, b := c*len(samples)/width, (c+1)*len(samples)/width
+		lo, up := samples[a], samples[a]
+		for _, v := range samples[a:b] {
+			lo, up = min(lo, v), max(up, v)
+		}
+		ranges[c] = up - lo
+		hi = max(hi, ranges[c])
+	}
+	out := make([]rune, width)
+	for c, r := range ranges {
+		lvl := 0
+		if hi > 0 {
+			lvl = int(float64(r)/float64(hi)*float64(len(sparkLevels)-1) + 0.5)
+		}
+		out[c] = sparkLevels[lvl]
+	}
+	return string(out)
 }

@@ -6,6 +6,7 @@ package recorder
 import (
 	"encoding/hex"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -59,7 +60,15 @@ type Status struct {
 	LastPacket   time.Time
 	Stats        storage.Statistics
 	Err          error
+
+	// Display only: rolling HRV over the last LiveHRVWindowS seconds of RR
+	// intervals, and the most recent ECG samples (µV, oldest first).
+	LiveHRV   LiveHRV
+	RecentECG []int32
 }
+
+// LiveHRVWindowS is the window of the rolling HRV estimate in Status.
+const LiveHRVWindowS = 60.0
 
 // Recorder consumes packets and events. Packet may be called from any
 // goroutine (typically BLE callbacks) and never blocks; everything else is
@@ -77,8 +86,11 @@ type Recorder struct {
 	stopped atomic.Bool
 	dropped atomic.Int64
 
-	mu     sync.Mutex
-	status Status
+	mu      sync.Mutex
+	status  Status
+	liveECG []int32  // guarded by mu; display only
+	liveRR  []LiveRR // guarded by mu; display only
+	rrBreak bool     // guarded by mu; next live RR interval starts a new run
 
 	// Owned by the run goroutine.
 	ecg            *polar.ECGTimeline
@@ -173,6 +185,7 @@ func (r *Recorder) Status() Status {
 	defer r.mu.Unlock()
 	s := r.status
 	s.Stats.DroppedPackets = r.dropped.Load()
+	s.RecentECG = slices.Clone(r.liveECG)
 	return s
 }
 
@@ -275,6 +288,13 @@ func (r *Recorder) handleHR(p polar.Packet, elapsed int64) {
 	r.status.Stats.RRSamples += int64(len(r.rrBuf))
 	if len(r.rrBuf) > 0 {
 		r.status.RRMs = polar.RRMillis(r.rrBuf[len(r.rrBuf)-1].Raw)
+		// No successive difference across a re-anchor or reconnect.
+		brk := r.rrBreak || rebased
+		r.rrBreak = false
+		for i, iv := range r.rrBuf {
+			r.liveRR = appendRing(r.liveRR, liveRRIntervals, LiveRR{MS: polar.RRMillis(iv.Raw), Break: brk && i == 0})
+		}
+		r.status.LiveHRV = ComputeLiveHRV(r.liveRR, LiveHRVWindowS)
 	}
 	// Report contact changes, and a missing contact when first seen.
 	var contactChanged bool
@@ -318,6 +338,9 @@ func (r *Recorder) handleECG(p polar.Packet, elapsed int64) {
 	r.status.Stats.ECGSamples += int64(len(r.ecgBuf))
 	r.status.LastECG = p.Received
 	r.status.ECGStreaming = true
+	for _, smp := range r.ecgBuf {
+		r.liveECG = appendRing(r.liveECG, liveECGSamples, smp.Microvolts)
+	}
 	if pl.MissingSamples > 0 {
 		r.status.Stats.ECGGaps++
 		r.status.Stats.ECGMissingSamplesEst += pl.MissingSamples
@@ -366,6 +389,8 @@ func (r *Recorder) handleEvent(ev *event) {
 		r.status.Connected = false
 		r.status.ECGStreaming = false
 		r.status.Stats.Disconnects++
+		r.rrBreak = true
+		r.liveECG = r.liveECG[:0]
 	case EvECGStreamStopped:
 		r.status.ECGStreaming = false
 	case EvBatteryLevel:
