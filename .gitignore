@@ -2,6 +2,7 @@
 /bin/
 /dist/
 *.test
+.DS_Store
 
 # analysis
 analysis-output/
